@@ -1,6 +1,7 @@
 from app import db
 from datetime import datetime
-
+from sqlalchemy.exc import SQLAlchemyError
+import logging
 
 class Task(db.Model):
     """
@@ -36,12 +37,17 @@ class Task(db.Model):
             title: 任務名稱（不可為空字串）
 
         Returns:
-            新建立的 Task 物件
+            新建立的 Task 物件或 None (如果失敗)
         """
-        task = cls(title=title.strip())
-        db.session.add(task)
-        db.session.commit()
-        return task
+        try:
+            task = cls(title=title.strip())
+            db.session.add(task)
+            db.session.commit()
+            return task
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            logging.error(f"Error creating task: {e}")
+            return None
 
     @classmethod
     def get_all(cls, status: str = "all") -> list["Task"]:
@@ -53,26 +59,59 @@ class Task(db.Model):
         Returns:
             符合條件的 Task 物件列表
         """
-        query = cls.query
+        try:
+            query = cls.query
 
-        if status == "pending":
-            query = query.filter_by(is_done=False)
-        elif status == "done":
-            query = query.filter_by(is_done=True)
+            if status == "pending":
+                query = query.filter_by(is_done=False)
+            elif status == "done":
+                query = query.filter_by(is_done=True)
 
-        return query.order_by(cls.created_at.desc()).all()
+            return query.order_by(cls.created_at.desc()).all()
+        except SQLAlchemyError as e:
+            logging.error(f"Error fetching tasks: {e}")
+            return []
 
     @classmethod
     def get_by_id(cls, task_id: int) -> "Task":
-        """依 id 取得單筆任務；若不存在則回傳 404。
+        """依 id 取得單筆任務。
 
         Args:
             task_id: 任務的主鍵 id
 
         Returns:
-            對應的 Task 物件
+            對應的 Task 物件或 None
         """
-        return cls.query.get_or_404(task_id)
+        return cls.query.get(task_id)
+
+    @classmethod
+    def update(cls, task_id: int, title: str = None, is_done: bool = None) -> "Task":
+        """更新指定任務的內容。
+
+        Args:
+            task_id: 任務 ID
+            title: 新的標題 (選擇性)
+            is_done: 新的狀態 (選擇性)
+
+        Returns:
+            更新後的 Task 物件或 None
+        """
+        try:
+            task = cls.get_by_id(task_id)
+            if not task:
+                return None
+            
+            if title is not None:
+                task.title = title.strip()
+            if is_done is not None:
+                task.is_done = is_done
+                
+            db.session.commit()
+            return task
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            logging.error(f"Error updating task {task_id}: {e}")
+            return None
 
     @classmethod
     def toggle(cls, task_id: int) -> "Task":
@@ -82,20 +121,40 @@ class Task(db.Model):
             task_id: 要切換的任務 id
 
         Returns:
-            更新後的 Task 物件
+            更新後的 Task 物件或 None
         """
-        task = cls.get_by_id(task_id)
-        task.is_done = not task.is_done
-        db.session.commit()
-        return task
+        try:
+            task = cls.get_by_id(task_id)
+            if not task:
+                return None
+            
+            task.is_done = not task.is_done
+            db.session.commit()
+            return task
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            logging.error(f"Error toggling task {task_id}: {e}")
+            return None
 
     @classmethod
-    def delete(cls, task_id: int) -> None:
+    def delete(cls, task_id: int) -> bool:
         """刪除指定任務。
 
         Args:
             task_id: 要刪除的任務 id
+
+        Returns:
+            是否刪除成功
         """
-        task = cls.get_by_id(task_id)
-        db.session.delete(task)
-        db.session.commit()
+        try:
+            task = cls.get_by_id(task_id)
+            if not task:
+                return False
+                
+            db.session.delete(task)
+            db.session.commit()
+            return True
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            logging.error(f"Error deleting task {task_id}: {e}")
+            return False
